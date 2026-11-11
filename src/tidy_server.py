@@ -51,6 +51,9 @@ INSTRUCTIONS = """Tidy organizes folders on David's PC. Workflow when he says 't
 4) Apply with move / rename_pattern / make_folders / remove_empty_folders, then report briefly
    with the job_id (so 'undo' works) and mention that moved media may need relinking in
    Resolve/Blender (the job's relink_list has old -> new paths).
+To see what photos show (to sort by character, project or kind), use photo_sheets on the folder, then look at
+the sheet JPGs (stage them) instead of the originals; clear_photo_sheets afterwards. Group characters by matching
+them across pictures and name them from folder/file names or what David says, never by recognizing a real person.
 Never rename files inside software projects/code or camera-card folders unless asked.
 Deletes: only via recycle, only for items David agreed to in chat."""
 try:
@@ -502,7 +505,7 @@ def scan_folder(path: str) -> dict:
     return _run(f"scan {path}", _do_scan, path, True)
 
 
-_SKIP_DIRS = {"node_modules", ".git", "__pycache__", "$recycle.bin", "system volume information",
+_SKIP_DIRS = {"_tidy sheets", "node_modules", ".git", "__pycache__", "$recycle.bin", "system volume information",
               "appdata", "windows", "program files", "program files (x86)", "programdata"}
 
 
@@ -744,6 +747,97 @@ def recycle(paths: list[str], reason: str) -> dict:
     David's PC listing what and why; nothing happens unless he clicks Yes. Only call after you
     and David agreed in chat on what to remove."""
     return _run("recycle", _do_recycle, paths, reason)
+
+
+# ----------------------------------------------------------------- photo sheets (so Claude can see photos)
+SHEETS_DIR = "_Tidy sheets"
+PHOTO_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".jfif"}
+
+
+def _do_sheets(rec, folder, recursive, per_sheet, thumb):
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+    root = Path(os.path.expanduser(folder))
+    if not root.is_dir():
+        return {"error": f"Not a folder: {root}"}
+    photos, skipped = [], Counter()
+    walker = os.walk(root, onerror=lambda e: None) if recursive else [(str(root), [], sorted(os.listdir(root)))]
+    for dp, dns, fns in walker:
+        dns[:] = sorted(d for d in dns if d != SHEETS_DIR)
+        for f in sorted(fns):
+            fp = os.path.join(dp, f)
+            if not os.path.isfile(fp):
+                continue
+            e = _ext(f)
+            if e in PHOTO_EXT:
+                photos.append(fp)
+            elif e in {".dng", ".nef", ".cr2", ".cr3", ".arw", ".r3d", ".heic"}:
+                skipped[e] += 1
+    out = root / SHEETS_DIR
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir()
+    (out / ".tidy-sheets").write_text("made by Tidy; safe to delete", encoding="utf-8")
+    try:
+        font = ImageFont.load_default(size=max(14, thumb // 12))
+        small = ImageFont.load_default(size=max(11, thumb // 18))
+    except TypeError:
+        font = small = ImageFont.load_default()
+    cols = 8 if per_sheet >= 32 else 6
+    cell_w, cell_h = thumb + 8, thumb + 30
+    index, sheets, unreadable = {}, [], []
+    for s_i in range(0, len(photos), per_sheet):
+        chunk = photos[s_i:s_i + per_sheet]
+        rows = (len(chunk) + cols - 1) // cols
+        sheet = Image.new("RGB", (cols * cell_w + 8, rows * cell_h + 8), (24, 26, 28))
+        draw = ImageDraw.Draw(sheet)
+        for j, fp in enumerate(chunk):
+            n = s_i + j + 1
+            rec["progress"] = f"{n}/{len(photos)} photos"
+            x, y = 8 + (j % cols) * cell_w, 8 + (j // cols) * cell_h
+            try:
+                with Image.open(fp) as im:
+                    im.draft("RGB", (thumb * 2, thumb * 2))
+                    im = ImageOps.exif_transpose(im).convert("RGB")
+                    im.thumbnail((thumb, thumb))
+                    sheet.paste(im, (x + (thumb - im.width) // 2, y + (thumb - im.height) // 2))
+            except Exception:
+                unreadable.append(os.path.relpath(fp, root))
+                draw.rectangle([x, y, x + thumb, y + thumb], outline=(120, 40, 40))
+            draw.rectangle([x, y, x + thumb // 4, y + thumb // 9], fill=(22, 163, 124))
+            draw.text((x + 4, y + 1), str(n), fill=(255, 255, 255), font=font)
+            name = os.path.basename(fp)
+            draw.text((x, y + thumb + 4), name if len(name) <= 30 else name[:27] + "...", fill=(190, 198, 196), font=small)
+            index[n] = os.path.relpath(fp, root)
+        p = out / f"sheet_{len(sheets) + 1:02d}.jpg"
+        sheet.save(p, quality=80)
+        sheets.append(str(p))
+    (out / "index.json").write_text(json.dumps(index, indent=1), encoding="utf-8")
+    return {"folder": str(root), "photos": len(photos), "sheets": sheets, "numbers_to_files": str(out / "index.json"),
+            "index": index if len(index) <= 600 else "too long here, read numbers_to_files",
+            "not_photos_skipped": dict(skipped), "unreadable": unreadable[:50],
+            "note": f"Each sheet shows {per_sheet} numbered thumbnails. Delete with clear_photo_sheets when done."}
+
+
+@mcp.tool()
+def photo_sheets(folder: str, recursive: bool = False, per_sheet: int = 48, thumb: int = 220) -> dict:
+    """Make numbered contact sheets (small thumbnail grids, JPG) of the photos in a folder, so Claude can look at
+    many photos quickly without copying the originals. Saved in '<folder>\\_Tidy sheets' with index.json
+    (number -> file). Raw camera files are counted but not drawn. Remove with clear_photo_sheets."""
+    per_sheet = max(6, min(int(per_sheet), 96))
+    thumb = max(96, min(int(thumb), 400))
+    return _run(f"photo sheets {folder}", _do_sheets, folder, recursive, per_sheet, thumb)
+
+
+@mcp.tool()
+def clear_photo_sheets(folder: str) -> dict:
+    """Delete the '_Tidy sheets' folder that photo_sheets made in this folder (only a folder Tidy made)."""
+    out = Path(os.path.expanduser(folder)) / SHEETS_DIR
+    if not out.exists():
+        return {"status": "nothing to clear"}
+    if not (out / ".tidy-sheets").exists():
+        return {"error": "That _Tidy sheets folder wasn't made by Tidy, so it was left alone."}
+    shutil.rmtree(out)
+    return {"status": "cleared", "folder": str(out)}
 
 
 @mcp.tool()

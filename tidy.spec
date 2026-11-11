@@ -5,8 +5,9 @@ from PyInstaller.utils.hooks import collect_submodules
 datas = [("tidy.json", "."), ("assets/tidy.ico", "assets"), ("assets/tidy_128.png", "assets"), ("assets/tidy.png", "assets")]
 
 server = Analysis(["src/tidy_server.py"], datas=datas,
-                  hiddenimports=collect_submodules("mcp", filter=lambda n: not n.startswith("mcp.cli")) + ["send2trash"], excludes=["tkinter"])
-app = Analysis(["src/tidy_app.py"], datas=datas, excludes=["mcp", "pydantic", "starlette", "uvicorn", "anyio"])
+                  hiddenimports=collect_submodules("mcp", filter=lambda n: not n.startswith("mcp.cli")) + ["send2trash", "PIL.Image", "PIL.ImageDraw", "PIL.ImageFont", "PIL.ImageOps"], excludes=["tkinter"])
+app = Analysis(["src/tidy_app.py"], datas=datas, hiddenimports=["pystray._win32", "PIL.ImageTk"],
+               excludes=["mcp", "pydantic", "starlette", "uvicorn", "anyio"])
 
 server_pyz = PYZ(server.pure)
 app_pyz = PYZ(app.pure)

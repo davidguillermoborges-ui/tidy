@@ -80,6 +80,58 @@ class TidyTest(unittest.TestCase):
         self.assertIn("No", r["status"])
         self.assertTrue(os.path.exists(self.p("notes.txt")))
 
+    def test_photo_sheets_number_every_photo(self):
+        from PIL import Image
+        pics = os.path.join(self.root, "Pics")
+        os.makedirs(os.path.join(pics, "sub"))
+        for i in range(7):
+            Image.new("RGB", (300 + i * 10, 200), (i * 30, 90, 160)).save(os.path.join(pics, f"p{i}.jpg"))
+        Image.new("RGB", (50, 80)).save(os.path.join(pics, "sub", "deep.png"))
+        with open(os.path.join(pics, "raw.dng"), "wb") as f:
+            f.write(b"raw")
+        r = T._do_sheets(REC, pics, True, 6, 120)
+        self.assertEqual(r["photos"], 8)
+        self.assertEqual(len(r["sheets"]), 2)
+        self.assertEqual(r["not_photos_skipped"], {".dng": 1})
+        self.assertEqual(r["index"][8], os.path.join("sub", "deep.png"))
+        again = T._do_sheets(REC, pics, True, 48, 120)   # the sheets folder itself is never drawn
+        self.assertEqual(again["photos"], 8)
+        self.assertEqual(T.clear_photo_sheets(pics)["status"], "cleared")
+        self.assertFalse(os.path.exists(os.path.join(pics, T.SHEETS_DIR)))
+
+
+class AppConfigTest(unittest.TestCase):
+    """'Connected' only counts Claude's real settings file, not the Store copy."""
+
+    def setUp(self):
+        try:
+            import tkinter  # noqa: F401
+        except ImportError:
+            self.skipTest("no tkinter here")
+        import importlib
+        os.environ["APPDATA"] = os.path.join(TMP, "Roaming")
+        os.environ["LOCALAPPDATA"] = os.path.join(TMP, "LocalAppData")
+        store = os.path.join(TMP, "LocalAppData", "Packages", "Claude_test", "LocalCache", "Roaming", "Claude")
+        os.makedirs(store, exist_ok=True)
+        self.store = os.path.join(store, "claude_desktop_config.json")
+        self.main = os.path.join(TMP, "Roaming", "Claude", "claude_desktop_config.json")
+        shutil.rmtree(os.path.dirname(self.main), ignore_errors=True)
+        import tidy_app
+        self.A = importlib.reload(tidy_app)
+
+    def test_store_copy_alone_is_not_connected(self):
+        with open(self.store, "w") as f:
+            json.dump({"mcpServers": {"tidy": self.A.server_entry()}}, f)
+        self.assertFalse(self.A.is_connected())
+        self.A.connect()
+        self.assertTrue(self.A.is_connected())
+        with open(self.main) as f:
+            self.assertIn("tidy", json.load(f)["mcpServers"])
+        self.A.disconnect()
+        self.assertFalse(self.A.is_connected())
+        with open(self.store) as f:
+            self.assertNotIn("tidy", json.load(f)["mcpServers"])
+
 
 if __name__ == "__main__":
     unittest.main()
