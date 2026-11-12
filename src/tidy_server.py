@@ -49,6 +49,9 @@ VERSION = _version()
 MAC = sys.platform == "darwin"
 TRASH = "Trash" if MAC else "Recycle Bin"
 INSTRUCTIONS = """Tidy organizes folders on the user's computer (Windows or Mac). Workflow when they say 'tidy <folder>':
+0) Call notes first. They are this person's own rules and project knowledge (what their projects are called,
+   where kinds of files go, naming styles, folders never to touch). Follow them in every plan and decision,
+   and say when a note decided something ("your notes say client work goes in 01 Projects").
 1) scan_folder (and list_folder / find_duplicates where useful).
 2) Reply in chat with a SIMPLE plan: the new folder layout, what moves where, renames (with an
    example or two), anything to delete (suggest only), and anything you can't place - ask about those.
@@ -60,7 +63,11 @@ To see what photos show (to sort by character, project or kind), use photo_sheet
 the sheet JPGs (stage them) instead of the originals; clear_photo_sheets afterwards. Group characters by matching
 them across pictures and name them from folder/file names or what the user says, never by recognizing a real person.
 Never rename files inside software projects/code or camera-card folders unless asked.
-Deletes: only via recycle, only for items the user agreed to in chat."""
+Deletes: only via recycle, only for items the user agreed to in chat.
+Learning: when the user teaches you something that will matter again (a project name and what belongs to it,
+where a kind of file goes, a naming style, a folder to leave alone, something to always delete), ask in one short
+line: "Save this to your Tidy notes? <the note>". Call save_note ONLY after they say yes. Never save on your own,
+never save guesses, and never save anything about identifying real people. Use forget_note when they ask."""
 try:
     mcp = _Server("tidy", instructions=INSTRUCTIONS)
 except TypeError:
@@ -730,7 +737,41 @@ _MAC_DIALOG = """on run argv
 end run"""
 
 
-def _confirm_box(title: str, text: str) -> bool:
+def _app_command():
+    """How to start Tidy's own window program (for the Tidy-style confirm box), or None."""
+    if getattr(sys, "frozen", False):
+        exe = Path(sys.executable).parent / ("Tidy" if MAC else "Tidy.exe")
+        return [str(exe)] if exe.exists() else None
+    app = Path(__file__).resolve().parent / "tidy_app.py"
+    return [sys.executable, str(app)] if app.exists() else None
+
+
+def _tidy_box(details: dict):
+    """Show the Tidy-style Yes/No window (Tidy.exe --confirm). True/False, or None if it couldn't be shown."""
+    cmd = _app_command()
+    if not cmd:
+        return None
+    req = DATA / f"confirm_{uuid.uuid4().hex[:8]}.json"
+    try:
+        req.write_text(json.dumps(details), encoding="utf-8")
+        r = subprocess.run(cmd + ["--confirm", str(req)])
+        return {10: True, 11: False}.get(r.returncode)
+    except Exception as e:  # noqa
+        _log(f"Tidy box failed: {e}")
+        return None
+    finally:
+        try:
+            req.unlink()
+        except OSError:
+            pass
+
+
+def _confirm_box(title: str, text: str, details: dict | None = None) -> bool:
+    """Ask Yes/No on the computer: the Tidy-style window if possible, else the system's own box."""
+    if details is not None:
+        answer = _tidy_box(details)
+        if answer is not None:
+            return answer
     if MAC:
         try:
             r = subprocess.run(["osascript", "-e", _MAC_DIALOG, text, title], capture_output=True, text=True)
@@ -770,7 +811,9 @@ def _do_recycle(rec, paths, reason):
     rec["progress"] = "waiting for the user to click Yes or No in the Tidy box on the computer (it may be behind other windows)"
     msg = (f"Claude wants to move {len(items)} item(s), {_human(total)}, to the {TRASH}.\n\n"
            f"Why: {reason}\n\n{lines}{more}\n\nFull list: {listfile}\n\nMove them to the {TRASH}?")
-    if not _confirm_box("Tidy - OK to delete?" if MAC else "Tidy - OK to recycle?", msg):
+    details = {"kind": "delete", "trash": TRASH, "reason": reason, "total": _human(total), "list_file": str(listfile),
+               "items": [[os.path.basename(p) + ("/" if os.path.isdir(p) else ""), _human(s), p] for p, s in items]}
+    if not _confirm_box("Tidy - OK to delete?" if MAC else "Tidy - OK to recycle?", msg, details):
         return {"status": "The user clicked No - nothing was removed."}
     job = _Job("recycle", "recycle")
     done, errs = [], []
@@ -885,11 +928,74 @@ def clear_photo_sheets(folder: str) -> dict:
     return {"status": "cleared", "folder": str(out)}
 
 
+# ----------------------------------------------------------------- notes (Tidy learns each person)
+NOTES_FILE = DATA / "tidy_notes.md"
+_NOTES_HEAD = ("# My Tidy notes\n\n"
+               "What Claude has learned about how you organize your files. Claude reads these before every plan.\n"
+               "One note per line starting with \"- \". You can edit or delete lines here.\n\n")
+
+
+def _read_notes() -> list[str]:
+    if not NOTES_FILE.exists():
+        return []
+    return [ln[2:].strip() for ln in NOTES_FILE.read_text(encoding="utf-8-sig").splitlines()
+            if ln.startswith("- ") and ln[2:].strip()]
+
+
+def _write_notes(notes: list[str]):
+    NOTES_FILE.write_text(_NOTES_HEAD + "".join(f"- {n}\n" for n in notes), encoding="utf-8")
+
+
+@mcp.tool()
+def notes() -> dict:
+    """This person's Tidy notes: their own rules and project knowledge, saved only on this computer.
+    Read them before every plan and follow them."""
+    ns = _read_notes()
+    return {"notes": [{"number": i + 1, "note": n} for i, n in enumerate(ns)], "count": len(ns),
+            "file": str(NOTES_FILE),
+            "how": "Follow these. To add one, ask the user 'Save this to your Tidy notes?' and call save_note only after yes."}
+
+
+@mcp.tool()
+def save_note(note: str) -> dict:
+    """Save one note to this person's Tidy notes. ONLY call after the user said yes to saving this exact note.
+    Keep it short and specific, e.g. 'Lipbalm = images of the pink hoodie / bunny mask girl -> 01 Projects/Lipbalm'."""
+    note = " ".join(note.split())
+    if not note:
+        return {"error": "Empty note."}
+    ns = _read_notes()
+    if note.lower() in (n.lower() for n in ns):
+        return {"status": "already saved", "count": len(ns)}
+    ns.append(note)
+    _write_notes(ns)
+    _log(f"note saved: {note}")
+    return {"status": "saved", "number": len(ns), "count": len(ns)}
+
+
+@mcp.tool()
+def forget_note(number: int = 0, text: str = "") -> dict:
+    """Remove a note by its number (from notes) or by text it contains. Only when the user asks."""
+    ns = _read_notes()
+    if number:
+        if not 1 <= number <= len(ns):
+            return {"error": f"There is no note {number}.", "count": len(ns)}
+        gone = [ns.pop(number - 1)]
+    else:
+        t = text.lower().strip()
+        gone = [n for n in ns if t and t in n.lower()]
+        if len(gone) != 1:
+            return {"error": "Say which note (number), these match:" if gone else "No note matches.",
+                    "matches": gone}
+        ns.remove(gone[0])
+    _write_notes(ns)
+    return {"status": "forgotten", "removed": gone[0], "count": len(ns)}
+
+
 @mcp.tool()
 def tidy_info() -> dict:
-    """Tidy version, where logs live, and which locations are protected."""
+    """Tidy version, where logs live, which locations are protected, and how many notes there are."""
     return {"version": VERSION, "jobs_folder": str(JOBS), "protected": _PROTECTED,
-            "python": sys.version.split()[0]}
+            "notes": len(_read_notes()), "notes_file": str(NOTES_FILE), "python": sys.version.split()[0]}
 
 
 if __name__ == "__main__":

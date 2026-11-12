@@ -35,6 +35,19 @@ The Tidy window (Windows: Start menu > Tidy; Mac: Applications > Tidy) shows whe
 **History & undo**. On Windows it stays in the tray by the clock when you close it; on a Mac it keeps running
 in the Dock.
 
+## Tidy learns how you work
+
+Tell Claude things like "Lipbalm is the project with the pink hoodie images" or "never touch my camera card folders".
+Claude asks **"Save this to your Tidy notes?"** and saves it only if you say yes. Before every plan Claude reads your
+notes and follows them. Your notes stay on your computer, so everyone's Tidy learns them separately.
+Open them from **⚙ Settings > Open my notes** to read, edit or delete them.
+
+## Updates
+
+**⚙ Settings** (under the Tidy window) checks for updates once a day. Click **Update now** when one is ready.
+On Windows, Tidy installs it and opens again by itself. On a Mac, drag the new Tidy onto Applications and choose
+Replace. Quit and reopen Claude after an update.
+
 ## How Tidy keeps your files safe
 
 - Claude proposes, you approve. Claude is told never to move, rename or delete before you say yes in chat.
