@@ -1,5 +1,18 @@
 # Tidy changes
 
+## 1.4.0 (2026-11-12)
+- **Tidy learns each person (My Tidy notes).** Each person has their own notes, saved only on their own computer: project names and what belongs to them, where kinds of files go, naming styles, folders to leave alone.
+  - Claude reads them before every plan, follows them, and says when a note decided something.
+  - When you teach Claude something like that, it asks "Save this to your Tidy notes?" and only saves after you say yes. You can also say "forget the note about…".
+  - New tools for Claude: `notes`, `save_note`, `forget_note`.
+  - The notes are a plain text file you can edit yourself: Settings > Open my notes.
+- **Settings** (the ⚙ Settings link under the Tidy window):
+  - Shows your version and checks for updates, by itself once a day (you can turn that off) or with **Check now**.
+  - When there's a new version, **Update now** downloads it. On Windows, Tidy installs it quietly and opens again by itself. On a Mac, the new DMG opens and you drag Tidy onto Applications.
+  - The "Tidy x.y is out" line in the main window now opens Settings.
+- **New delete box in the Tidy look.** The Yes/No box before anything goes to the Recycle Bin / Trash is now a Tidy window: the logo, how many items, Claude's reason, the list of files with sizes, and **Keep them** / **Move to Recycle Bin** buttons. Closing it or pressing Esc keeps the files. If it can't open, Tidy falls back to the old system box.
+- GitHub's build machines now also open the window and Settings and click both answers in the delete box, on Windows and Mac.
+
 ## 1.3.0 (2026-11-12)
 - **Tidy for Mac:** `Tidy-1.3.0.dmg` for Apple Silicon Macs (M1 or newer, macOS 12 or later). Drag Tidy into Applications, open it, click **Connect to Claude**. Not signed yet, so the first open needs **System Settings > Privacy & Security > Open Anyway**.
 - On a Mac, Tidy works like a normal Mac app: closing the window keeps it running, its Dock icon opens it again, and Cmd+Q quits.

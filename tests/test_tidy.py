@@ -74,6 +74,34 @@ class TidyTest(unittest.TestCase):
         r = T.move([{"from": os.path.join(os.environ["LOCALAPPDATA"], "x"), "to": self.p("x")}], "bad")
         self.assertEqual(r["moved"], 0)
 
+    def test_notes_save_list_forget(self):
+        if T.NOTES_FILE.exists():
+            T.NOTES_FILE.unlink()
+        self.assertEqual(T.notes()["count"], 0)
+        self.assertEqual(T.save_note("Lipbalm = pink hoodie  images")["status"], "saved")
+        self.assertEqual(T.save_note("lipbalm = pink hoodie images")["status"], "already saved")
+        T.save_note("Never touch RED card folders")
+        n = T.notes()
+        self.assertEqual([x["note"] for x in n["notes"]], ["Lipbalm = pink hoodie images", "Never touch RED card folders"])
+        with open(T.NOTES_FILE, "a", encoding="utf-8") as f:   # the user edits the file by hand
+            f.write("- Akari = the Video folder\nnot a note line\n")
+        self.assertEqual(T.notes()["count"], 3)
+        self.assertEqual(T.forget_note(text="red card")["status"], "forgotten")
+        self.assertIn("error", T.forget_note(number=9))
+        self.assertEqual(T.forget_note(number=1)["removed"], "Lipbalm = pink hoodie images")
+        self.assertEqual(T.notes()["notes"][0]["note"], "Akari = the Video folder")
+
+    def test_tidy_box_answer_codes(self):
+        import subprocess as sp
+        real = sp.run
+        try:
+            for code, want in ((10, True), (11, False), (1, None)):
+                T.subprocess.run = lambda *a, **k: sp.CompletedProcess(a, code)
+                self.assertEqual(T._tidy_box({"items": []}), want)
+        finally:
+            T.subprocess.run = real
+        self.assertEqual([f for f in os.listdir(T.DATA) if f.startswith("confirm_")], [])
+
     @unittest.skipUnless(sys.platform == "darwin", "Mac only")
     def test_mac_protected_and_drives(self):
         self.assertTrue(T._is_protected("/System/Library/x"))
@@ -83,7 +111,7 @@ class TidyTest(unittest.TestCase):
         self.assertEqual(T.drives()[0]["drive"], "/")
 
     def test_recycle_needs_yes(self):
-        T._confirm_box = lambda title, text: False
+        T._confirm_box = lambda *a, **k: False
         r = T._do_recycle(REC, [self.p("notes.txt")], "test")
         self.assertIn("No", r["status"])
         self.assertTrue(os.path.exists(self.p("notes.txt")))

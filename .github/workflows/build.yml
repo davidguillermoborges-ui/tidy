@@ -47,6 +47,19 @@ jobs:
           Write-Host $out
           if ($out -notmatch 'OK') { throw "tidy-server.exe --check failed" }
           python tests/mcp_smoke.py dist\Tidy\tidy-server.exe
+      - name: Check the window, Settings and the Tidy delete box
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\Tidy\Tidy.exe -ArgumentList '--selftest' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "window/settings selftest failed ($($p.ExitCode))" }
+          '{"trash":"Recycle Bin","reason":"test","total":"2 KB","items":[["a.jpg","1 KB","x"],["b.jpg","1 KB","y"]]}' | Out-File -Encoding utf8 req.json
+          $env:TIDY_TEST_ANSWER = "yes"
+          $p = Start-Process dist\Tidy\Tidy.exe -ArgumentList '--confirm', "$PWD\req.json" -Wait -PassThru
+          if ($p.ExitCode -ne 10) { throw "delete box yes gave $($p.ExitCode)" }
+          $env:TIDY_TEST_ANSWER = "no"
+          $p = Start-Process dist\Tidy\Tidy.exe -ArgumentList '--confirm', "$PWD\req.json" -Wait -PassThru
+          if ($p.ExitCode -ne 11) { throw "delete box no gave $($p.ExitCode)" }
+          Write-Host "window, settings and delete box OK"
       - name: Build the installer
         shell: pwsh
         run: |
@@ -116,7 +129,7 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' dist/Tidy.app/Contents/Info.plist)" = "Tidy"
           "$APP/tidy-server" --check | grep OK
           python tests/mcp_smoke.py "$APP/tidy-server"
-      - name: Test from Applications (window starts, connect, disconnect)
+      - name: Test from Applications (connect, disconnect, window + Settings, delete box)
         run: |
           set -e
           rm -rf /Applications/Tidy.app && cp -R dist/Tidy.app /Applications/
@@ -126,10 +139,13 @@ jobs:
           python3 -c "import json,sys; c=json.load(open(sys.argv[1]))['mcpServers']['tidy']['command']; assert c=='/Applications/Tidy.app/Contents/MacOS/tidy-server', c; print('connected:', c)" "$CFG"
           "$M/Tidy" --disconnect
           python3 -c "import json,sys; assert 'tidy' not in json.load(open(sys.argv[1]))['mcpServers']" "$CFG"
-          "$M/Tidy" & PID=$!
-          sleep 10
-          kill -0 $PID   # still running = the window opened without crashing
-          kill $PID
+          "$M/Tidy" --selftest
+          printf '{"trash":"Trash","reason":"test","total":"2 KB","items":[["a.jpg","1 KB","x"],["b.jpg","1 KB","y"]]}' > req.json
+          set +e
+          TIDY_TEST_ANSWER=yes "$M/Tidy" --confirm "$PWD/req.json"; Y=$?
+          TIDY_TEST_ANSWER=no "$M/Tidy" --confirm "$PWD/req.json"; N=$?
+          set -e
+          [ "$Y" = 10 ] && [ "$N" = 11 ] || { echo "delete box gave $Y / $N"; exit 1; }
           echo "mac app OK"
       - name: Make the DMG
         run: |

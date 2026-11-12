@@ -47,6 +47,8 @@ Name: "{userdesktop}\Tidy"; Filename: "{app}\Tidy.exe"; Tasks: desktopicon
 [Run]
 Filename: "{app}\Tidy.exe"; Parameters: "--connect"; Tasks: connect; Flags: runhidden waituntilterminated; StatusMsg: "Connecting Tidy to Claude..."
 Filename: "{app}\Tidy.exe"; Description: "Open Tidy"; Flags: postinstall nowait skipifsilent
+; "Update now" in Tidy's Settings runs this installer with /SILENT /relaunch=1: open Tidy again afterwards
+Filename: "{app}\Tidy.exe"; Flags: nowait; Check: Relaunch
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Tidy.exe"; Flags: runhidden; RunOnceId: "StopTidy"
@@ -57,6 +59,11 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM tidy-server.exe"; Flags: run
 FinishedLabel=Tidy is installed.%n%nIf Claude Desktop is open, quit it fully (right-click its icon by the clock and choose Quit), then open it again.%n%nThen type "tidy" and a folder in Claude, for example: tidy my Downloads folder.
 
 [Code]
+function Relaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;
+
 // Stop a running Tidy window and Tidy's Claude connection so their files can be replaced on an update.
 // Claude reconnects to Tidy the next time it starts.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
