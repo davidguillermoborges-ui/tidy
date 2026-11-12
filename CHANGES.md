@@ -1,5 +1,13 @@
 # Tidy changes
 
+## 1.2.0 (2026-11-12)
+- **Installer for anyone:** `TidySetup-1.2.0.exe`. Installs for the current Windows user (no admin password) with Start menu and desktop shortcuts, and shows up in Windows "Apps" for uninstalling. A ticked "Connect Tidy to Claude Desktop now" box connects it during install (the normal and the Microsoft Store versions of Claude). Updating stops a running Tidy first. Uninstalling removes Tidy from Claude's settings and keeps your history and undo files.
+- Download it from the GitHub Releases page. Each version tag (`v1.2.0`) builds and publishes the installer automatically, after the build machine has test-installed, connected and uninstalled it.
+- The Tidy window now says when Claude Desktop isn't installed (with a link to get it) and when a newer Tidy is out (with a link to download it).
+- Nothing in Tidy is specific to one person any more: Claude's instructions and the recycle box talk about "the user". The Higgsfield rename rule stays built in as an example rule.
+- `Tidy.exe --connect` and `Tidy.exe --disconnect` connect and disconnect without opening the window (used by the installer).
+- Connecting keeps every other connector already in Claude's settings (tested, including files Notepad saved with a BOM).
+
 ## 1.1.0 (2026-11-11)
 - New look for the Tidy window (design "A"): logo, "Connected to Claude" status pill, a short how-to line, and two buttons: History & undo, and Connect/Disconnect.
 - Tidy now lives in the Windows tray. Closing or minimizing the window hides it there; click the tray icon to open it; right-click for Open Tidy, History & undo, Quit. Starting Tidy again while it runs just shows the open window.

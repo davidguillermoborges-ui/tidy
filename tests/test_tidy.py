@@ -132,6 +132,30 @@ class AppConfigTest(unittest.TestCase):
         with open(self.store) as f:
             self.assertNotIn("tidy", json.load(f)["mcpServers"])
 
+    def test_command_line_connect_and_disconnect(self):
+        sys.argv = ["Tidy.exe", "--connect"]
+        self.assertEqual(self.A.main(), 0)
+        self.assertTrue(self.A.is_connected())
+        sys.argv = ["Tidy.exe", "--disconnect"]
+        self.assertEqual(self.A.main(), 0)
+        self.assertFalse(self.A.is_connected())
+
+    def test_keeps_other_connectors(self):
+        os.makedirs(os.path.dirname(self.main), exist_ok=True)
+        with open(self.main, "w", encoding="utf-8-sig") as f:   # BOM, like Notepad saves it
+            json.dump({"mcpServers": {"other": {"command": "x"}}, "keep": 1}, f)
+        self.A.connect()
+        with open(self.main, encoding="utf-8") as f:
+            cfg = json.load(f)
+        self.assertEqual(set(cfg["mcpServers"]), {"other", "tidy"})
+        self.assertEqual(cfg["keep"], 1)
+
+    def test_version_compare(self):
+        self.assertTrue(self.A.newer("1.10.0", "1.9.2"))
+        self.assertTrue(self.A.newer("v1.2.0", "1.1.0"))
+        self.assertFalse(self.A.newer("1.1.0", "1.1.0"))
+        self.assertFalse(self.A.newer("1.2.0", "dev"))
+
 
 if __name__ == "__main__":
     unittest.main()

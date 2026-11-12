@@ -2,6 +2,8 @@
 
 Closing or minimizing the window hides it to the tray; the tray icon opens it again, and its menu has
 Open, History & undo and Quit. Starting Tidy.exe while it already runs just shows the open one.
+
+Command line (used by the installer):  Tidy.exe --connect   /   Tidy.exe --disconnect
 """
 import glob
 import json
@@ -12,6 +14,8 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import urllib.request
+import webbrowser
 from pathlib import Path
 
 FROZEN = getattr(sys, "frozen", False)
@@ -22,6 +26,9 @@ SERVER_PY = HERE / "tidy_server.py"
 NAME = "tidy"
 DATA = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Tidy"
 SHOW_PORT = 47431   # a second Tidy.exe asks the running one to show itself here
+REPO = "davidguillermoborges-ui/tidy"
+RELEASES = f"https://github.com/{REPO}/releases/latest"
+CLAUDE_DOWNLOAD = "https://claude.ai/download"
 
 GREEN, GREEN_DARK = "#16A37C", "#0F6B51"
 INK, MUTED, FAINT, LINE, BG = "#1B2422", "#55615E", "#6B7774", "#DDE3E1", "#FFFFFF"
@@ -61,7 +68,7 @@ def write_cfg(p, cfg):
 
 
 def server_entry():
-    """Same entry HMNS Dev writes."""
+    """What Claude runs for Tidy (the same entry HMNS Dev writes)."""
     if FROZEN:
         return {"command": str(SERVER_EXE), "args": []}
     return {"command": sys.executable, "args": [str(SERVER_PY)]}
@@ -89,6 +96,34 @@ def disconnect():
         if NAME in cfg.get("mcpServers", {}):
             del cfg["mcpServers"][NAME]
             write_cfg(p, cfg)
+
+
+def claude_installed():
+    """Best guess whether Claude Desktop is on this PC (normal installer or Microsoft Store)."""
+    local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    return ((local / "AnthropicClaude").exists() or bool(glob.glob(str(local / "Packages" / "Claude_*")))
+            or main_config().parent.exists())
+
+
+def newer(a, b):
+    """True if version a is newer than version b ('1.10.0' > '1.9.2')."""
+    def parts(v):
+        try:
+            return tuple(int(x) for x in v.strip().lstrip("v").split("."))
+        except ValueError:
+            return ()
+    return parts(a) > parts(b) != ()
+
+
+def latest_release():
+    """Newest version number on GitHub Releases, or None (offline, no releases yet...)."""
+    try:
+        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
+                                     headers={"User-Agent": "Tidy", "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            return json.loads(r.read().decode("utf-8")).get("tag_name", "").lstrip("v") or None
+    except Exception:
+        return None
 
 
 def version():
@@ -173,7 +208,7 @@ class App:
         root.title("Tidy")
         root.configure(bg=BG)
         root.resizable(False, False)
-        root.geometry("380x470")
+        root.geometry("380x495")
         try:
             root.iconbitmap(str(ASSETS / "tidy.ico"))
         except Exception:
@@ -199,6 +234,11 @@ class App:
 
         self.msg = tk.Label(body, font=(FONT, 9), bg=BG, fg=MUTED, wraplength=300, justify="center")
         self.msg.pack(pady=(12, 0))
+        self.link = tk.Label(body, font=(FONT, 9, "underline"), bg=BG, fg=GREEN_DARK, cursor="hand2")
+        self.link.pack(pady=(6, 0))
+        self.link.bind("<Button-1>", lambda e: self.link_url and webbrowser.open(self.link_url))
+        self.link_url = None
+        self.update_to = None
 
         tk.Frame(body, bg=BG).pack(fill="both", expand=True)
         row = tk.Frame(body, bg=BG)
@@ -216,6 +256,13 @@ class App:
         self.start_tray()
         listen_for_show(lambda: root.after(0, self.show))
         self.refresh()
+        threading.Thread(target=self.check_update, daemon=True).start()
+
+    def check_update(self):
+        v = latest_release()
+        if v and newer(v, version()):
+            self.update_to = v
+            self.root.after(0, self.refresh)
 
     # ---- status
     def refresh(self, note=None, error=False):
@@ -231,6 +278,13 @@ class App:
         default = ("In Claude chat, say “tidy” and the folder. Claude shows a plan, you approve, it's done."
                    if on else "One click and Claude can look at, move and rename your files. Every change can be undone.")
         self.msg.config(text=note or default, fg="#B03A2E" if error else MUTED)
+        if not claude_installed():
+            self.link_url, text = CLAUDE_DOWNLOAD, "Tidy needs Claude Desktop. Get it here"
+        elif self.update_to:
+            self.link_url, text = RELEASES, f"Tidy {self.update_to} is out. Download the update"
+        else:
+            self.link_url, text = None, ""
+        self.link.config(text=text)
 
     def toggle(self):
         try:
@@ -285,6 +339,17 @@ class App:
 
 
 def main():
+    if "--connect" in sys.argv or "--disconnect" in sys.argv:   # the installer / uninstaller
+        try:
+            connect() if "--connect" in sys.argv else disconnect()
+            return 0
+        except Exception as e:
+            try:
+                (DATA).mkdir(parents=True, exist_ok=True)
+                (DATA / "connect_error.txt").write_text(str(e), encoding="utf-8")
+            except Exception:
+                pass
+            return 1
     if ask_running_tidy_to_show():
         return
     root = tk.Tk()
@@ -293,4 +358,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
