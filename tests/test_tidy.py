@@ -77,9 +77,9 @@ class TidyTest(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "darwin", "Mac only")
     def test_mac_protected_and_drives(self):
         self.assertTrue(T._is_protected("/System/Library/x"))
-        self.assertTrue(T._is_protected(os.path.expanduser("~/Library/Preferences")))
+        self.assertTrue(T._is_protected(T.HOME / "Library" / "Preferences"))
         self.assertTrue(T._is_protected("/"))
-        self.assertFalse(T._is_protected(os.path.expanduser("~/Desktop/stuff")))
+        self.assertFalse(T._is_protected(T.HOME / "Desktop" / "stuff"))
         self.assertEqual(T.drives()[0]["drive"], "/")
 
     def test_recycle_needs_yes(self):
