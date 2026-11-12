@@ -1,5 +1,18 @@
 # Tidy changes
 
+## 1.3.0 (2026-11-12)
+- **Tidy for Mac:** `Tidy-1.3.0.dmg` for Apple Silicon Macs (M1 or newer, macOS 12 or later). Drag Tidy into Applications, open it, click **Connect to Claude**. Not signed yet, so the first open needs **System Settings > Privacy & Security > Open Anyway**.
+- On a Mac, Tidy works like a normal Mac app: closing the window keeps it running, its Dock icon opens it again, and Cmd+Q quits.
+- Mac versions of the Windows-only parts:
+  - Connects to Mac Claude's settings file (`~/Library/Application Support/Claude`).
+  - Deleting uses a Mac Yes/No dialog and sends files to the Trash.
+  - System, Library, Applications and your own Library folder can be read but never changed.
+  - `drives` lists the startup disk and the disks in `/Volumes`.
+  - History, undo and the log live in `~/Library/Application Support/Tidy`.
+- If Tidy was opened straight from the DMG or from Downloads, it asks you to drag it into Applications first, so Claude doesn't lose it later. Connecting also clears macOS's "downloaded" mark on the app so macOS doesn't block Tidy when Claude starts it.
+- Each release now has the Windows installer and the Mac DMG together. GitHub's Mac machine tests every build: the tests, the app starting, connect and disconnect from Applications, and the DMG.
+- Windows: no changes apart from the version number.
+
 ## 1.2.0 (2026-11-12)
 - **Installer for anyone:** `TidySetup-1.2.0.exe`. Installs for the current Windows user (no admin password) with Start menu and desktop shortcuts, and shows up in Windows "Apps" for uninstalling. A ticked "Connect Tidy to Claude Desktop now" box connects it during install (the normal and the Microsoft Store versions of Claude). Updating stops a running Tidy first. Uninstalling removes Tidy from Claude's settings and keeps your history and undo files.
 - Download it from the GitHub Releases page. Each version tag (`v1.2.0`) builds and publishes the installer automatically, after the build machine has test-installed, connected and uninstalled it.

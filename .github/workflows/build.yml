@@ -1,8 +1,8 @@
-# Builds Tidy on Windows.
-#  * every push to main: the finished app goes to the "dist" branch (HMNS Dev installs from it),
-#    and the installer TidySetup-<version>.exe is kept as a build artifact.
-#  * a tag like v1.2.0, or "Run workflow" with "release" ticked: also publishes TidySetup-1.2.0.exe on the GitHub Releases page for anyone to download.
-name: Build Tidy EXE
+# Builds Tidy for Windows and Mac.
+#  * every push to main: the Windows app goes to the "dist" branch (HMNS Dev installs from it);
+#    the Windows installer TidySetup-<version>.exe and the Mac Tidy-<version>.dmg are kept as build artifacts.
+#  * a tag like v1.3.0, or "Run workflow" with "release" ticked: also publishes both on the GitHub Releases page.
+name: Build Tidy
 on:
   push:
     branches: [main]
@@ -19,13 +19,21 @@ concurrency:
   group: build-tidy-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - id: ver
+        shell: pwsh
+        run: |
+          $ver = (Get-Content tidy.json -Raw | ConvertFrom-Json).version
+          "version=$ver" | Out-File -Append $env:GITHUB_OUTPUT
+          "TIDY_VERSION=$ver" | Out-File -Append $env:GITHUB_ENV
       - name: Install build tools
         run: python -m pip install -r requirements-build.txt
       - name: Tests
@@ -42,13 +50,11 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
-          $ver = (Get-Content tidy.json -Raw | ConvertFrom-Json).version
-          "TIDY_VERSION=$ver" | Out-File -Append $env:GITHUB_ENV
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
-          & $iscc /Qp "/DAppVersion=$ver" installer\tidy.iss
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc /Qp "/DAppVersion=$env:TIDY_VERSION" installer\tidy.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
-          Get-Item "dist\TidySetup-$ver.exe"
+          Get-Item "dist\TidySetup-$env:TIDY_VERSION.exe"
       - name: Test the installer (install, connect, uninstall)
         shell: pwsh
         run: |
@@ -71,26 +77,6 @@ jobs:
         with:
           name: TidySetup-${{ env.TIDY_VERSION }}
           path: dist/TidySetup-*.exe
-      - name: Publish a release
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "v$env:TIDY_VERSION" }
-          if ($tag -ne "v$env:TIDY_VERSION") { throw "tag $tag does not match tidy.json version $env:TIDY_VERSION" }
-          $changes = Get-Content CHANGES.md -Raw
-          $pattern = '(?ms)^## ' + [regex]::Escape($env:TIDY_VERSION) + '\b[^\n]*\n(.*?)(?=^## |\z)'
-          $section = [regex]::Match($changes, $pattern).Groups[1].Value.Trim()
-          $notes = @"
-          **Download TidySetup-$env:TIDY_VERSION.exe below**, run it, then quit and reopen Claude Desktop. Needs Windows 10 or 11 and Claude Desktop.
-
-          Windows may say "Windows protected your PC" because the installer isn't signed yet: click **More info**, then **Run anyway**.
-
-          $section
-          "@
-          $notes | Out-File -Encoding utf8 notes.md
-          gh release create $tag "dist\TidySetup-$env:TIDY_VERSION.exe" --title "Tidy $env:TIDY_VERSION" --notes-file notes.md --target "${{ github.sha }}"
       - name: Publish to the dist branch
         if: github.ref == 'refs/heads/main'
         shell: pwsh
@@ -105,3 +91,79 @@ jobs:
           git add -A
           git commit -q -m "Tidy build from $msg"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" dist
+
+  mac:
+    runs-on: macos-latest   # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Version
+        run: echo "TIDY_VERSION=$(python3 -c 'import json;print(json.load(open("tidy.json"))["version"])')" >> "$GITHUB_ENV"
+      - name: Install build tools
+        run: |
+          python -m pip install -r requirements-build.txt
+          python -c "import tkinter; print('Tk', tkinter.TkVersion)"
+      - name: Tests
+        run: python -m unittest discover -s tests -v
+      - name: Build
+        run: pyinstaller --noconfirm tidy.spec
+      - name: Check the app
+        run: |
+          set -e
+          APP=dist/Tidy.app/Contents/MacOS
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' dist/Tidy.app/Contents/Info.plist)" = "Tidy"
+          "$APP/tidy-server" --check | grep OK
+          python tests/mcp_smoke.py "$APP/tidy-server"
+      - name: Test from Applications (window starts, connect, disconnect)
+        run: |
+          set -e
+          rm -rf /Applications/Tidy.app && cp -R dist/Tidy.app /Applications/
+          M=/Applications/Tidy.app/Contents/MacOS
+          CFG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+          "$M/Tidy" --connect
+          python3 -c "import json,sys; c=json.load(open(sys.argv[1]))['mcpServers']['tidy']['command']; assert c=='/Applications/Tidy.app/Contents/MacOS/tidy-server', c; print('connected:', c)" "$CFG"
+          "$M/Tidy" --disconnect
+          python3 -c "import json,sys; assert 'tidy' not in json.load(open(sys.argv[1]))['mcpServers']" "$CFG"
+          "$M/Tidy" & PID=$!
+          sleep 10
+          kill -0 $PID   # still running = the window opened without crashing
+          kill $PID
+          echo "mac app OK"
+      - name: Make the DMG
+        run: |
+          set -e
+          mkdir -p dmg
+          cp -R dist/Tidy.app dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "Tidy" -srcfolder dmg -ov -format UDZO "dist/Tidy-$TIDY_VERSION.dmg"
+          hdiutil verify "dist/Tidy-$TIDY_VERSION.dmg"
+          ls -la dist/*.dmg
+      - name: Keep the DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tidy-${{ env.TIDY_VERSION }}-mac
+          path: dist/Tidy-*.dmg
+
+  release:
+    needs: [windows, mac]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VER: ${{ needs.windows.outputs.version }}
+        run: |
+          set -e
+          if [ "${{ github.ref_type }}" = "tag" ]; then TAG="${{ github.ref_name }}"; else TAG="v$VER"; fi
+          [ "$TAG" = "v$VER" ] || { echo "tag $TAG does not match tidy.json version $VER"; exit 1; }
+          python3 .github/release_notes.py "$VER" > notes.md
+          cat notes.md
+          gh release create "$TAG" files/* --title "Tidy $VER" --notes-file notes.md --target "${{ github.sha }}"
