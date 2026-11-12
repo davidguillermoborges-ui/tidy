@@ -51,4 +51,4 @@ Windows Settings > Apps > Tidy > Uninstall. This also removes Tidy from Claude's
 | `.github/workflows/build.yml` | Windows build: tests, EXEs, installer, an install/connect/uninstall test; `dist` branch on main; a GitHub Release on `v*` tags |
 | `tests/` | `python -m unittest discover -s tests -v`; `tests/mcp_smoke.py` checks the server answers like Claude expects |
 
-Release: bump `tidy.json`, add a `CHANGES.md` entry, merge to main, then push a tag `v<version>`.
+Release: bump `tidy.json`, add a `CHANGES.md` entry, merge to main, then push a tag `v<version>` (or run the workflow on main with "release" ticked).
