@@ -1,14 +1,17 @@
-# Builds the Tidy EXEs on Windows for every push to main and puts the finished app on the "dist" branch.
-# HMNS Dev pulls the "dist" branch and installs it to %LOCALAPPDATA%\Programs\Tidy.
+# Builds Tidy on Windows.
+#  * every push to main: the finished app goes to the "dist" branch (HMNS Dev installs from it),
+#    and the installer TidySetup-<version>.exe is kept as a build artifact.
+#  * a tag like v1.2.0: also publishes TidySetup-1.2.0.exe on the GitHub Releases page for anyone to download.
 name: Build Tidy EXE
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 permissions:
   contents: write
 concurrency:
-  group: build-tidy
+  group: build-tidy-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build:
@@ -31,7 +34,60 @@ jobs:
           Write-Host $out
           if ($out -notmatch 'OK') { throw "tidy-server.exe --check failed" }
           python tests/mcp_smoke.py dist\Tidy\tidy-server.exe
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $ver = (Get-Content tidy.json -Raw | ConvertFrom-Json).version
+          "TIDY_VERSION=$ver" | Out-File -Append $env:GITHUB_ENV
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc /Qp "/DAppVersion=$ver" installer\tidy.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          Get-Item "dist\TidySetup-$ver.exe"
+      - name: Test the installer (install, connect, uninstall)
+        shell: pwsh
+        run: |
+          $setup = "dist\TidySetup-$env:TIDY_VERSION.exe"
+          Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=connect' -Wait
+          $app = "$env:LOCALAPPDATA\Programs\Tidy"
+          if (-not (Test-Path "$app\tidy-server.exe")) { throw "not installed" }
+          $cfg = Get-Content "$env:APPDATA\Claude\claude_desktop_config.json" -Raw | ConvertFrom-Json
+          if ($cfg.mcpServers.tidy.command -ne "$app\tidy-server.exe") { throw "not connected: $($cfg | ConvertTo-Json -Depth 5)" }
+          & "$app\tidy-server.exe" --check
+          Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+          for ($i = 0; $i -lt 30 -and (Test-Path "$app\tidy-server.exe"); $i++) { Start-Sleep 1 }   # the uninstaller finishes from a temp copy
+          Start-Sleep 2
+          $cfg = Get-Content "$env:APPDATA\Claude\claude_desktop_config.json" -Raw | ConvertFrom-Json
+          if ($cfg.mcpServers.tidy) { throw "uninstall left Tidy in Claude's settings" }
+          if (Test-Path "$app\tidy-server.exe") { throw "uninstall left files" }
+          Write-Host "installer OK"
+      - name: Keep the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: TidySetup-${{ env.TIDY_VERSION }}
+          path: dist/TidySetup-*.exe
+      - name: Publish a release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -ne "v$env:TIDY_VERSION") { throw "tag $tag does not match tidy.json version $env:TIDY_VERSION" }
+          $changes = Get-Content CHANGES.md -Raw
+          $pattern = '(?ms)^## ' + [regex]::Escape($env:TIDY_VERSION) + '\b[^\n]*\n(.*?)(?=^## |\z)'
+          $section = [regex]::Match($changes, $pattern).Groups[1].Value.Trim()
+          $notes = @"
+          **Download TidySetup-$env:TIDY_VERSION.exe below**, run it, then quit and reopen Claude Desktop. Needs Windows 10 or 11 and Claude Desktop.
+
+          Windows may say "Windows protected your PC" because the installer isn't signed yet: click **More info**, then **Run anyway**.
+
+          $section
+          "@
+          $notes | Out-File -Encoding utf8 notes.md
+          gh release create $tag "dist\TidySetup-$env:TIDY_VERSION.exe" --title "Tidy $env:TIDY_VERSION" --notes-file notes.md
       - name: Publish to the dist branch
+        if: github.ref == 'refs/heads/main'
         shell: pwsh
         run: |
           Copy-Item tidy.json, CHANGES.md dist\Tidy\

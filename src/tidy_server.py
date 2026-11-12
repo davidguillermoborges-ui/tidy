@@ -1,5 +1,5 @@
 """
-Tidy - lets Claude look at, move, rename and organize folders on David's PC.
+Tidy - lets Claude look at, move, rename and organize folders on this PC.
 
 Safety nets:
   * every move/rename/new-folder is logged as a "job" and can be undone (undo_job)
@@ -43,19 +43,19 @@ def _version():
 
 
 VERSION = _version()
-INSTRUCTIONS = """Tidy organizes folders on David's PC. Workflow when he says 'tidy <folder>':
+INSTRUCTIONS = """Tidy organizes folders on the user's Windows PC. Workflow when they say 'tidy <folder>':
 1) scan_folder (and list_folder / find_duplicates where useful).
 2) Reply in chat with a SIMPLE plan: the new folder layout, what moves where, renames (with an
    example or two), anything to delete (suggest only), and anything you can't place - ask about those.
-3) Wait for David to approve in chat. Do not move, rename or recycle before he says yes.
+3) Wait for the user to approve in chat. Do not move, rename or recycle before they say yes.
 4) Apply with move / rename_pattern / make_folders / remove_empty_folders, then report briefly
    with the job_id (so 'undo' works) and mention that moved media may need relinking in
    Resolve/Blender (the job's relink_list has old -> new paths).
 To see what photos show (to sort by character, project or kind), use photo_sheets on the folder, then look at
 the sheet JPGs (stage them) instead of the originals; clear_photo_sheets afterwards. Group characters by matching
-them across pictures and name them from folder/file names or what David says, never by recognizing a real person.
+them across pictures and name them from folder/file names or what the user says, never by recognizing a real person.
 Never rename files inside software projects/code or camera-card folders unless asked.
-Deletes: only via recycle, only for items David agreed to in chat."""
+Deletes: only via recycle, only for items the user agreed to in chat."""
 try:
     mcp = _Server("tidy", instructions=INSTRUCTIONS)
 except TypeError:
@@ -651,7 +651,7 @@ def rename_pattern(folder: str, find_regex: str, replace_with: str, recursive: b
 @mcp.tool()
 def rename_rules(action: str = "list", name: str = "", find_regex: str = "",
                  replace_with: str = "") -> dict:
-    """Saved rename rules David wants applied again later (e.g. Higgsfield hf_ names).
+    """Saved rename rules the user wants applied again later (e.g. Higgsfield hf_ names).
     action: 'list', 'save' (name + find_regex + replace_with) or 'delete' (name).
     To use one, pass its regex/replacement to rename_pattern."""
     rules = json.loads(RULES_FILE.read_text(encoding="utf-8")) if RULES_FILE.exists() else {
@@ -722,11 +722,11 @@ def _do_recycle(rec, paths, reason):
     more = f"\n  ...and {len(items) - 15} more" if len(items) > 15 else ""
     listfile = DATA / "last_recycle_request.txt"
     listfile.write_text("\n".join(f"{p}\t{_human(s)}" for p, s in items), encoding="utf-8")
-    rec["progress"] = "waiting for David to click Yes or No on the PC"
+    rec["progress"] = "waiting for the user to click Yes or No in the Tidy box on the PC (it may be behind other windows)"
     msg = (f"Claude wants to move {len(items)} item(s), {_human(total)}, to the Recycle Bin.\n\n"
            f"Why: {reason}\n\n{lines}{more}\n\nFull list: {listfile}\n\nSend them to the Recycle Bin?")
     if not _confirm_box("Tidy - OK to recycle?", msg):
-        return {"status": "David said No - nothing was removed."}
+        return {"status": "The user clicked No - nothing was removed."}
     job = _Job("recycle", "recycle")
     done, errs = [], []
     for p, s in items:
@@ -744,8 +744,8 @@ def _do_recycle(rec, paths, reason):
 @mcp.tool()
 def recycle(paths: list[str], reason: str) -> dict:
     """Send files/folders to the Windows Recycle Bin (never permanent). A Yes/No box pops up on
-    David's PC listing what and why; nothing happens unless he clicks Yes. Only call after you
-    and David agreed in chat on what to remove."""
+    the PC listing what and why; nothing happens unless the user clicks Yes. Only call after you
+    and the user agreed in chat on what to remove."""
     return _run("recycle", _do_recycle, paths, reason)
 
 
