@@ -1,7 +1,8 @@
-"""Tidy window (look "A"): status, History & undo, Connect/Disconnect. Lives in the Windows tray.
+"""Tidy window (look "A"): status, History & undo, Connect/Disconnect.
 
-Closing or minimizing the window hides it to the tray; the tray icon opens it again, and its menu has
-Open, History & undo and Quit. Starting Tidy.exe while it already runs just shows the open one.
+Windows: lives in the tray. Closing or minimizing the window hides it to the tray; the tray icon opens it
+again, and its menu has Open, History & undo and Quit. Starting Tidy.exe while it already runs shows the open one.
+Mac: a normal Mac app. Closing the window keeps Tidy running; click its Dock icon to open it again; Cmd+Q quits.
 
 Command line (used by the installer):  Tidy.exe --connect   /   Tidy.exe --disconnect
 """
@@ -19,12 +20,18 @@ import webbrowser
 from pathlib import Path
 
 FROZEN = getattr(sys, "frozen", False)
+MAC = sys.platform == "darwin"
 HERE = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent
 ASSETS = Path(getattr(sys, "_MEIPASS", "")) / "assets" if FROZEN else HERE.parent / "assets"
-SERVER_EXE = HERE / "tidy-server.exe"
+SERVER_EXE = HERE / ("tidy-server" if MAC else "tidy-server.exe")
 SERVER_PY = HERE / "tidy_server.py"
 NAME = "tidy"
-DATA = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Tidy"
+if os.environ.get("LOCALAPPDATA"):
+    DATA = Path(os.environ["LOCALAPPDATA"]) / "Tidy"
+elif MAC:
+    DATA = Path.home() / "Library" / "Application Support" / "Tidy"
+else:
+    DATA = Path.home() / "AppData" / "Local" / "Tidy"
 SHOW_PORT = 47431   # a second Tidy.exe asks the running one to show itself here
 REPO = "davidguillermoborges-ui/tidy"
 RELEASES = f"https://github.com/{REPO}/releases/latest"
@@ -33,19 +40,31 @@ CLAUDE_DOWNLOAD = "https://claude.ai/download"
 GREEN, GREEN_DARK = "#16A37C", "#0F6B51"
 INK, MUTED, FAINT, LINE, BG = "#1B2422", "#55615E", "#6B7774", "#DDE3E1", "#FFFFFF"
 PILL_ON, PILL_OFF = "#E6F6F0", "#F1F3F2"
-FONT = "Segoe UI"
+FONT = "Helvetica Neue" if MAC else "Segoe UI"
+
+
+def F(size, *style):
+    """Mac draws points smaller than Windows, so the same look needs bigger numbers there."""
+    return (FONT, round(size * 1.3) if MAC else size) + style
+
+
+RESTART = ("Quit Claude (Claude menu > Quit, or Cmd+Q) and open it again" if MAC
+           else "Quit Claude from its tray icon and open it again")
 
 
 # ---------------------------------------------------------------- Claude's settings
 def main_config():
-    """The settings file Claude actually reads (%APPDATA%\\Claude). This is what 'Connected' means."""
+    """The settings file Claude actually reads (%APPDATA%\\Claude; Mac: ~/Library/Application Support/Claude).
+    This is what 'Connected' means."""
+    if MAC:
+        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     return Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "Claude" / "claude_desktop_config.json"
 
 
 def store_configs():
     """The Microsoft Store copy, if there is one. Kept in step, but never counted as connected."""
     local = os.environ.get("LOCALAPPDATA")
-    if not local:
+    if MAC or not local:
         return []
     return [Path(d) / "claude_desktop_config.json"
             for d in glob.glob(os.path.join(local, "Packages", "Claude_*", "LocalCache", "Roaming", "Claude"))]
@@ -81,9 +100,41 @@ def is_connected():
         return False
 
 
+def app_bundle():
+    """Mac: the Tidy.app folder this copy runs from (None when not built as an app)."""
+    if MAC and FROZEN:
+        for p in HERE.parents:
+            if p.suffix == ".app":
+                return p
+    return None
+
+
+def location_problem():
+    """Mac: Tidy must run from Applications, not from the DMG or Downloads, or Claude loses it later."""
+    b = app_bundle()
+    if b is None:
+        return None
+    s = str(b)
+    if "/AppTranslocation/" in s or s.startswith("/Volumes/"):
+        return "Drag Tidy into your Applications folder first, then open it from there."
+    return None
+
+
+def unquarantine():
+    """Mac: an unsigned download is marked 'quarantined'. Once the user opened Tidy, clear the mark on the whole
+    app so macOS doesn't block tidy-server when Claude starts it."""
+    b = app_bundle()
+    if b:
+        subprocess.run(["xattr", "-dr", "com.apple.quarantine", str(b)], capture_output=True)
+
+
 def connect():
+    problem = location_problem()
+    if problem:
+        raise RuntimeError(problem)
     if FROZEN and not SERVER_EXE.exists():
-        raise RuntimeError("tidy-server.exe is missing next to Tidy.exe. Reinstall Tidy.")
+        raise RuntimeError(f"{SERVER_EXE.name} is missing next to Tidy. Reinstall Tidy.")
+    unquarantine()
     for p in [main_config()] + [s for s in store_configs() if s.exists()]:
         cfg = read_cfg(p)
         cfg.setdefault("mcpServers", {})[NAME] = server_entry()
@@ -99,7 +150,10 @@ def disconnect():
 
 
 def claude_installed():
-    """Best guess whether Claude Desktop is on this PC (normal installer or Microsoft Store)."""
+    """Best guess whether Claude Desktop is on this computer (normal installer or Microsoft Store)."""
+    if MAC:
+        return any(p.exists() for p in (Path("/Applications/Claude.app"), Path.home() / "Applications" / "Claude.app",
+                                        main_config().parent))
     local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
     return ((local / "AnthropicClaude").exists() or bool(glob.glob(str(local / "Packages" / "Claude_*")))
             or main_config().parent.exists())
@@ -137,7 +191,7 @@ def version():
 def open_history():
     p = DATA / "jobs"
     p.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen(["explorer", str(p)])
+    subprocess.Popen(["open" if MAC else "explorer", str(p)])
 
 
 # ---------------------------------------------------------------- one Tidy at a time
@@ -199,7 +253,7 @@ class RoundButton(tk.Canvas):
         r, w, h = 10, self.w - 1, self.h - 1
         pts = [r, 0, w - r, 0, w, 0, w, r, w, h - r, w, h, w - r, h, r, h, 0, h, 0, h - r, 0, r, 0, 0]
         self.create_polygon(pts, smooth=True, fill=fill, outline=outline or fill)
-        self.create_text(self.w / 2, self.h / 2, text=self.text, fill=fg, font=(FONT, 10, "bold" if self.kind == "primary" else "normal"))
+        self.create_text(self.w / 2, self.h / 2, text=self.text, fill=fg, font=F(10, "bold" if self.kind == "primary" else "normal"))
 
 
 class App:
@@ -222,19 +276,19 @@ class App:
         body = tk.Frame(root, bg=BG)
         body.pack(fill="both", expand=True, padx=32, pady=(30, 18))
         tk.Label(body, image=self.logo, bg=BG).pack()
-        tk.Label(body, text="Tidy", font=(FONT, 22, "bold"), bg=BG, fg=INK).pack(pady=(10, 0))
-        tk.Label(body, text="Claude organizes your folders", font=(FONT, 10), bg=BG, fg=MUTED).pack()
+        tk.Label(body, text="Tidy", font=F(22, "bold"), bg=BG, fg=INK).pack(pady=(10, 0))
+        tk.Label(body, text="Claude organizes your folders", font=F(10), bg=BG, fg=MUTED).pack()
 
         self.pill = tk.Frame(body, bg=PILL_ON)
         self.pill.pack(pady=(14, 0))
         self.dot = tk.Canvas(self.pill, width=10, height=10, bg=PILL_ON, highlightthickness=0)
         self.dot.pack(side="left", padx=(12, 6), pady=7)
-        self.pill_text = tk.Label(self.pill, font=(FONT, 10, "bold"), bg=PILL_ON, fg=GREEN_DARK)
+        self.pill_text = tk.Label(self.pill, font=F(10, "bold"), bg=PILL_ON, fg=GREEN_DARK)
         self.pill_text.pack(side="left", padx=(0, 12))
 
-        self.msg = tk.Label(body, font=(FONT, 9), bg=BG, fg=MUTED, wraplength=300, justify="center")
+        self.msg = tk.Label(body, font=F(9), bg=BG, fg=MUTED, wraplength=300, justify="center")
         self.msg.pack(pady=(12, 0))
-        self.link = tk.Label(body, font=(FONT, 9, "underline"), bg=BG, fg=GREEN_DARK, cursor="hand2")
+        self.link = tk.Label(body, font=F(9, "underline"), bg=BG, fg=GREEN_DARK, cursor="hand2")
         self.link.pack(pady=(6, 0))
         self.link.bind("<Button-1>", lambda e: self.link_url and webbrowser.open(self.link_url))
         self.link_url = None
@@ -247,14 +301,18 @@ class App:
         self.history_btn.pack(side="left")
         self.connect_btn = RoundButton(row, "", self.toggle)
         self.connect_btn.pack(side="right")
-        tk.Label(body, text=f"version {version()}", font=(FONT, 8), bg=BG, fg=FAINT).pack(pady=(12, 0))
+        tk.Label(body, text=f"version {version()}", font=F(8), bg=BG, fg=FAINT).pack(pady=(12, 0))
 
         # closing or minimizing hides to the tray
         root.protocol("WM_DELETE_WINDOW", self.hide)
         root.bind("<Unmap>", self.on_unmap)
         self.tray = None
-        self.start_tray()
-        listen_for_show(lambda: root.after(0, self.show))
+        if MAC:   # normal Mac app: the Dock icon brings the window back, Cmd+Q quits
+            root.createcommand("tk::mac::ReopenApplication", self.show)
+            root.createcommand("tk::mac::Quit", self.quit)
+        else:
+            self.start_tray()
+            listen_for_show(lambda: root.after(0, self.show))
         self.refresh()
         threading.Thread(target=self.check_update, daemon=True).start()
 
@@ -275,7 +333,8 @@ class App:
         self.pill_text.config(text="Connected to Claude" if on else "Not connected", bg=bg, fg=GREEN_DARK if on else MUTED)
         self.connect_btn.style("secondary" if on else "primary")
         self.connect_btn.set_text("Disconnect" if on else "Connect to Claude")
-        default = ("In Claude chat, say “tidy” and the folder. Claude shows a plan, you approve, it's done."
+        problem = location_problem()
+        default = (problem or "In Claude chat, say “tidy” and the folder. Claude shows a plan, you approve, it's done."
                    if on else "One click and Claude can look at, move and rename your files. Every change can be undone.")
         self.msg.config(text=note or default, fg="#B03A2E" if error else MUTED)
         if not claude_installed():
@@ -290,10 +349,10 @@ class App:
         try:
             if is_connected():
                 disconnect()
-                self.refresh("Disconnected. Quit Claude from its tray icon and open it again to finish.")
+                self.refresh(f"Disconnected. {RESTART} to finish.")
             else:
                 connect()
-                self.refresh("Connected! Quit Claude from its tray icon and open it again. Then say “tidy” + a folder.")
+                self.refresh(f"Connected! {RESTART}. Then say “tidy” + a folder.")
         except Exception as e:
             self.refresh(f"Problem: {e}", error=True)
 
@@ -313,11 +372,13 @@ class App:
         self.tray.run_detached()
 
     def on_unmap(self, event):
+        if MAC:
+            return   # minimizing to the Dock is normal on a Mac
         if event.widget is self.root and self.root.state() == "iconic" and self.tray:
             self.root.after(0, self.hide)
 
     def hide(self):
-        if self.tray:
+        if self.tray or MAC:
             self.root.withdraw()
         else:
             self.quit()
@@ -350,7 +411,7 @@ def main():
             except Exception:
                 pass
             return 1
-    if ask_running_tidy_to_show():
+    if not MAC and ask_running_tidy_to_show():
         return
     root = tk.Tk()
     App(root)

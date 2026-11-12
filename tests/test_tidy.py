@@ -74,6 +74,14 @@ class TidyTest(unittest.TestCase):
         r = T.move([{"from": os.path.join(os.environ["LOCALAPPDATA"], "x"), "to": self.p("x")}], "bad")
         self.assertEqual(r["moved"], 0)
 
+    @unittest.skipUnless(sys.platform == "darwin", "Mac only")
+    def test_mac_protected_and_drives(self):
+        self.assertTrue(T._is_protected("/System/Library/x"))
+        self.assertTrue(T._is_protected(os.path.expanduser("~/Library/Preferences")))
+        self.assertTrue(T._is_protected("/"))
+        self.assertFalse(T._is_protected(os.path.expanduser("~/Desktop/stuff")))
+        self.assertEqual(T.drives()[0]["drive"], "/")
+
     def test_recycle_needs_yes(self):
         T._confirm_box = lambda title, text: False
         r = T._do_recycle(REC, [self.p("notes.txt")], "test")
@@ -114,11 +122,14 @@ class AppConfigTest(unittest.TestCase):
         store = os.path.join(TMP, "LocalAppData", "Packages", "Claude_test", "LocalCache", "Roaming", "Claude")
         os.makedirs(store, exist_ok=True)
         self.store = os.path.join(store, "claude_desktop_config.json")
-        self.main = os.path.join(TMP, "Roaming", "Claude", "claude_desktop_config.json")
-        shutil.rmtree(os.path.dirname(self.main), ignore_errors=True)
+        os.environ["HOME"] = os.path.join(TMP, "home")   # Mac keeps Claude's settings under the home folder
         import tidy_app
         self.A = importlib.reload(tidy_app)
+        self.main = str(self.A.main_config())
+        self.assertTrue(self.main.startswith(TMP))
+        shutil.rmtree(os.path.dirname(self.main), ignore_errors=True)
 
+    @unittest.skipIf(sys.platform == "darwin", "no Microsoft Store copy on a Mac")
     def test_store_copy_alone_is_not_connected(self):
         with open(self.store, "w") as f:
             json.dump({"mcpServers": {"tidy": self.A.server_entry()}}, f)
@@ -149,6 +160,12 @@ class AppConfigTest(unittest.TestCase):
             cfg = json.load(f)
         self.assertEqual(set(cfg["mcpServers"]), {"other", "tidy"})
         self.assertEqual(cfg["keep"], 1)
+
+    def test_mac_paths(self):
+        if sys.platform != "darwin":
+            self.skipTest("Mac only")
+        self.assertTrue(self.main.endswith("Library/Application Support/Claude/claude_desktop_config.json"))
+        self.assertEqual(self.A.SERVER_EXE.name, "tidy-server")
 
     def test_version_compare(self):
         self.assertTrue(self.A.newer("1.10.0", "1.9.2"))

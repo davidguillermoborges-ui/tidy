@@ -4,8 +4,10 @@ Tidy - lets Claude look at, move, rename and organize folders on this PC.
 Safety nets:
   * every move/rename/new-folder is logged as a "job" and can be undone (undo_job)
   * nothing is ever overwritten - a taken name gets " (2)", " (3)" ...
-  * deleting only sends to the Recycle Bin, and only after a Yes/No box on the PC
-  * Windows, Program Files, ProgramData and AppData can be read but never changed
+  * deleting only sends to the Recycle Bin (Mac: Trash), and only after a Yes/No box on the computer
+  * system folders (Windows, Program Files, AppData / Mac: System, Library, Applications) can be read
+    but never changed
+Runs on Windows and macOS.
 Long operations run in the background; if a call takes more than ~40 s it returns
 a task_id and Claude checks back with task_status.
 """
@@ -13,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import ctypes
+import subprocess
 import datetime as _dt
 import fnmatch
 import hashlib
@@ -43,7 +46,9 @@ def _version():
 
 
 VERSION = _version()
-INSTRUCTIONS = """Tidy organizes folders on the user's Windows PC. Workflow when they say 'tidy <folder>':
+MAC = sys.platform == "darwin"
+TRASH = "Trash" if MAC else "Recycle Bin"
+INSTRUCTIONS = """Tidy organizes folders on the user's computer (Windows or Mac). Workflow when they say 'tidy <folder>':
 1) scan_folder (and list_folder / find_duplicates where useful).
 2) Reply in chat with a SIMPLE plan: the new folder layout, what moves where, renames (with an
    example or two), anything to delete (suggest only), and anything you can't place - ask about those.
@@ -63,7 +68,12 @@ except TypeError:
 
 # ----------------------------------------------------------------- paths/safety
 HOME = Path(os.path.expanduser("~"))
-DATA = Path(os.environ.get("LOCALAPPDATA", HOME / "AppData" / "Local")) / "Tidy"
+if os.environ.get("LOCALAPPDATA"):
+    DATA = Path(os.environ["LOCALAPPDATA"]) / "Tidy"
+elif MAC:
+    DATA = HOME / "Library" / "Application Support" / "Tidy"
+else:
+    DATA = HOME / "AppData" / "Local" / "Tidy"
 JOBS = DATA / "jobs"
 RULES_FILE = DATA / "rename_rules.json"
 JOBS.mkdir(parents=True, exist_ok=True)
@@ -90,7 +100,12 @@ for _env, _sub in [("SystemRoot", ""), ("ProgramFiles", ""), ("ProgramFiles(x86)
     _v = os.environ.get(_env)
     if _v:
         _PROTECTED.append(_norm(_v))
-_PROTECTED += [_norm(HOME / "AppData"), _norm(DATA)]
+if MAC:
+    _PROTECTED += [_norm(p) for p in ("/System", "/Library", "/Applications", "/usr", "/bin", "/sbin",
+                                      "/opt", "/cores", HOME / "Library")]
+else:
+    _PROTECTED.append(_norm(HOME / "AppData"))
+_PROTECTED.append(_norm(DATA))
 _PROTECTED = sorted(set(_PROTECTED))
 
 
@@ -100,7 +115,9 @@ def _is_protected(p) -> bool:
         if n == root or n.startswith(root + os.sep):
             return True
     # drive roots and the home folder itself can't be moved/deleted
-    if re.fullmatch(r"[a-z]:", n) or n == _norm(HOME):
+    if re.fullmatch(r"[a-z]:", n) or n == _norm(HOME) or n in ("", "/"):
+        return True
+    if MAC and n.startswith("/Volumes/") and n.count("/") == 2:   # a whole disk
         return True
     return False
 
@@ -361,12 +378,25 @@ def list_jobs(limit: int = 20) -> list[dict]:
 
 
 # ----------------------------------------------------------------- looking
+def _drive_roots():
+    if MAC:   # the startup disk is "/", other disks are in /Volumes ("Macintosh HD" there is just "/")
+        roots = ["/"]
+        try:
+            for n in sorted(os.listdir("/Volumes")):
+                v = os.path.join("/Volumes", n)
+                if os.path.isdir(v) and os.path.realpath(v) != "/":
+                    roots.append(v)
+        except OSError:
+            pass
+        return roots
+    return [f"{letter}:\\" for letter in string.ascii_uppercase if os.path.exists(f"{letter}:\\")]
+
+
 @mcp.tool()
 def drives() -> list[dict]:
-    """List drives on the PC with total and free space."""
+    """List drives / disks with total and free space."""
     out = []
-    for letter in string.ascii_uppercase:
-        root = f"{letter}:\\"
+    for root in _drive_roots():
         if os.path.exists(root):
             try:
                 u = shutil.disk_usage(root)
@@ -506,15 +536,15 @@ def scan_folder(path: str) -> dict:
 
 
 _SKIP_DIRS = {"_tidy sheets", "node_modules", ".git", "__pycache__", "$recycle.bin", "system volume information",
+              ".trash", ".trashes", ".spotlight-v100", ".fseventsd",
               "appdata", "windows", "program files", "program files (x86)", "programdata"}
 
 
 def _default_roots():
     roots = [HOME / d for d in ["Desktop", "Documents", "Downloads", "Videos", "Pictures", "Music"]
              if (HOME / d).exists()]
-    for letter in string.ascii_uppercase:
-        r = f"{letter}:\\"
-        if letter != "C" and os.path.exists(r):
+    for r in _drive_roots():
+        if r not in ("/", "C:\\"):
             roots.append(Path(r))
     return roots
 
@@ -546,7 +576,7 @@ def _do_where(rec, query, roots, limit):
 def where_is(query: str, roots: list[str] | None = None, limit: int = 100) -> dict:
     """Find files or folders by name. query: words that must all be in the name ('bella proposal')
     or a glob ('*.r3d'). Default search: Desktop, Documents, Downloads, Videos, Pictures, Music
-    and every drive other than C:. Pass roots to search specific places."""
+    and every drive other than C: (Mac: other disks in /Volumes). Pass roots to search specific places."""
     rs = [Path(os.path.expanduser(r)) for r in roots] if roots else _default_roots()
     return _run(f"where_is {query}", _do_where, query, rs, limit)
 
@@ -691,7 +721,22 @@ def remove_empty_folders(path: str) -> dict:
     return _run("remove empty folders", _do_rm_empty, path)
 
 
+_MAC_DIALOG = """on run argv
+    with timeout of 86400 seconds
+        activate
+        set r to display dialog (item 1 of argv) with title (item 2 of argv) buttons {"No", "Yes"} default button "No" cancel button "No" with icon caution
+    end timeout
+    return button returned of r
+end run"""
+
+
 def _confirm_box(title: str, text: str) -> bool:
+    if MAC:
+        try:
+            r = subprocess.run(["osascript", "-e", _MAC_DIALOG, text, title], capture_output=True, text=True)
+            return r.returncode == 0 and r.stdout.strip() == "Yes"
+        except Exception:
+            return False
     try:
         MB_YESNO, MB_ICONWARNING, MB_TOPMOST, MB_SETFOREGROUND, IDYES = 0x4, 0x30, 0x40000, 0x10000, 6
         r = ctypes.windll.user32.MessageBoxW(None, text, title,
@@ -722,10 +767,10 @@ def _do_recycle(rec, paths, reason):
     more = f"\n  ...and {len(items) - 15} more" if len(items) > 15 else ""
     listfile = DATA / "last_recycle_request.txt"
     listfile.write_text("\n".join(f"{p}\t{_human(s)}" for p, s in items), encoding="utf-8")
-    rec["progress"] = "waiting for the user to click Yes or No in the Tidy box on the PC (it may be behind other windows)"
-    msg = (f"Claude wants to move {len(items)} item(s), {_human(total)}, to the Recycle Bin.\n\n"
-           f"Why: {reason}\n\n{lines}{more}\n\nFull list: {listfile}\n\nSend them to the Recycle Bin?")
-    if not _confirm_box("Tidy - OK to recycle?", msg):
+    rec["progress"] = "waiting for the user to click Yes or No in the Tidy box on the computer (it may be behind other windows)"
+    msg = (f"Claude wants to move {len(items)} item(s), {_human(total)}, to the {TRASH}.\n\n"
+           f"Why: {reason}\n\n{lines}{more}\n\nFull list: {listfile}\n\nMove them to the {TRASH}?")
+    if not _confirm_box("Tidy - OK to delete?" if MAC else "Tidy - OK to recycle?", msg):
         return {"status": "The user clicked No - nothing was removed."}
     job = _Job("recycle", "recycle")
     done, errs = [], []
@@ -738,13 +783,13 @@ def _do_recycle(rec, paths, reason):
             errs.append({"path": p, "error": str(e)})
     job.save()
     return {"status": "recycled", "count": len(done), "freed": _human(sum(s for p, s in items if p in done)),
-            "errors": errs, "note": "Restore from the Recycle Bin if needed."}
+            "errors": errs, "note": f"Restore from the {TRASH} if needed."}
 
 
 @mcp.tool()
 def recycle(paths: list[str], reason: str) -> dict:
-    """Send files/folders to the Windows Recycle Bin (never permanent). A Yes/No box pops up on
-    the PC listing what and why; nothing happens unless the user clicks Yes. Only call after you
+    """Send files/folders to the Recycle Bin (Mac: Trash; never permanent). A Yes/No box pops up on
+    the computer listing what and why; nothing happens unless the user clicks Yes. Only call after you
     and the user agreed in chat on what to remove."""
     return _run("recycle", _do_recycle, paths, reason)
 

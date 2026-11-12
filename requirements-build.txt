@@ -1,5 +1,5 @@
 mcp>=1.9,<2
 send2trash>=1.8
 pillow>=10.1
-pystray>=0.19
+pystray>=0.19; sys_platform == "win32"
 pyinstaller>=6.10
