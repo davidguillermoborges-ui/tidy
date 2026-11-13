@@ -70,6 +70,17 @@ class TidyTest(unittest.TestCase):
         self.assertEqual(r["count"], 2)
         self.assertFalse(os.path.exists(self.p("Empty")))
 
+    def test_move_into_new_folder_keeps_names(self):
+        target = self.p("New", "Tools")
+        r = T.move([{"from": self.p("Moc"), "to": target, "into": True},
+                    {"from": self.p("notes.txt"), "to": target, "into": True}], "into")
+        self.assertEqual(r["moved"], 2)
+        self.assertTrue(os.path.isfile(os.path.join(target, "Moc", "copy.mp4")))
+        self.assertTrue(os.path.isfile(os.path.join(target, "notes.txt")))
+        T.undo_job(r["job_id"])
+        self.assertTrue(os.path.isfile(self.p("Moc", "copy.mp4")))
+        self.assertFalse(os.path.exists(self.p("New")))
+
     def test_protected_locations_refused(self):
         r = T.move([{"from": os.path.join(os.environ["LOCALAPPDATA"], "x"), "to": self.p("x")}], "bad")
         self.assertEqual(r["moved"], 0)

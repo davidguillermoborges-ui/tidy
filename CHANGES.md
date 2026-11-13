@@ -1,5 +1,8 @@
 # Tidy changes
 
+## 1.4.1 (2026-11-13)
+- Fix: moving folders "into" a folder that doesn't exist yet. Before, the first folder moved became the new folder itself, so its files ended up loose (this happened to Captioner when tidying Downloads). Now Tidy creates the target folder first and puts every item inside it with its own name. Undo removes the new folder again.
+
 ## 1.4.0 (2026-11-12)
 - **Tidy learns each person (My Tidy notes).** Each person has their own notes, saved only on their own computer: project names and what belongs to them, where kinds of files go, naming styles, folders to leave alone.
   - Claude reads them before every plan, follows them, and says when a note decided something.
