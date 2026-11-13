@@ -263,7 +263,12 @@ def _do_moves(rec, items, job_name):
                 results.append({"from": str(src), "status": "skipped - not found"})
                 continue
             _check_writable(src, dst)
-            if dst.exists() and dst.is_dir() and it.get("into", False):
+            if it.get("into", False):
+                # "into": always drop the item INSIDE 'to', creating that folder if it isn't there yet
+                # (before 1.4.1 a missing 'to' made the first item become that folder itself)
+                if dst.exists() and not dst.is_dir():
+                    raise ValueError(f"'{dst}' is a file, not a folder to move into")
+                _mkdirs(dst, job)
                 dst = dst / src.name
             if _norm(dst).startswith(_norm(src) + os.sep):
                 raise ValueError("Can't move a folder inside itself")
@@ -301,7 +306,7 @@ def _do_moves(rec, items, job_name):
 def move(items: list[dict], job_name: str = "move") -> dict:
     """Move and/or rename files and folders (renaming = moving to a new name in the same folder).
     items: [{"from": "C:\\full\\old\\path", "to": "C:\\full\\new\\path"}, ...]
-    Add "into": true to drop the item inside an existing folder 'to' keeping its name.
+    Add "into": true to drop the item inside folder 'to' keeping its name (the folder is created if needed).
     Missing parent folders are created. Existing names are never overwritten (adds " (2)").
     Everything is logged as one job that undo_job can reverse. Works across drives."""
     if not items:
