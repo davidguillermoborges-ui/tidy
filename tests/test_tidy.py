@@ -13,7 +13,11 @@ HF = "hf_20261001_175428_1c15bc50-6ce4-462c-a60d-a16ec77c3be6.mp4"
 class TidyTest(unittest.TestCase):
     def setUp(self):
         self.root = os.path.join(TMP, "work")
-        shutil.rmtree(self.root, ignore_errors=True)
+        def _force(fn, path, _exc):          # Windows can't delete read-only files left by a test
+            os.chmod(path, 0o777)
+            fn(path)
+        if os.path.exists(self.root):
+            shutil.rmtree(self.root, onerror=_force)
         os.makedirs(os.path.join(self.root, "Video"))
         os.makedirs(os.path.join(self.root, "Moc"))
         os.makedirs(os.path.join(self.root, "Empty", "Sub"))
