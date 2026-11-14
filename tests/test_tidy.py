@@ -81,6 +81,29 @@ class TidyTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(self.p("Moc", "copy.mp4")))
         self.assertFalse(os.path.exists(self.p("New")))
 
+    def test_folder_to_other_drive_moves_file_by_file_and_undoes(self):
+        import stat as st
+        src = self.p("Proj")
+        os.makedirs(os.path.join(src, "Media", "Proxy"))
+        for rel in ("a.mov", os.path.join("Media", "b.jpg"), os.path.join("Media", "Proxy", "c.mov")):
+            with open(os.path.join(src, rel), "w") as f:
+                f.write(rel)
+        os.chmod(os.path.join(src, "Media", "b.jpg"), st.S_IREAD)       # read-only, like a synced file
+        real = T._same_drive
+        T._same_drive = lambda a, b: False                              # pretend D: is another drive
+        try:
+            r = T.move([{"from": src, "to": self.p("OtherDrive", "Proj")}], "x-drive")
+        finally:
+            T._same_drive = real
+        self.assertEqual(r["moved"], 1, r)
+        self.assertEqual(r["results"][0]["files"], 3)
+        self.assertFalse(os.path.exists(src))
+        self.assertTrue(os.path.isfile(self.p("OtherDrive", "Proj", "Media", "Proxy", "c.mov")))
+        u = T.undo_job(r["job_id"])
+        self.assertEqual(u["items_put_back"], 3, u)
+        self.assertTrue(os.path.isfile(os.path.join(src, "Media", "Proxy", "c.mov")))
+        self.assertFalse(os.path.exists(self.p("OtherDrive")))
+
     def test_protected_locations_refused(self):
         r = T.move([{"from": os.path.join(os.environ["LOCALAPPDATA"], "x"), "to": self.p("x")}], "bad")
         self.assertEqual(r["moved"], 0)

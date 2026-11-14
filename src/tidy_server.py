@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import string
 import sys
 import threading
@@ -236,6 +237,68 @@ class _Job:
                 w.writerow([o["op"], o.get("from", o.get("path", "")), o.get("to", "")])
 
 
+def _clear_readonly(p):
+    """Windows: a read-only flag (often set by sync apps) blocks deleting or moving. Clear it."""
+    try:
+        os.chmod(p, stat.S_IWRITE | stat.S_IREAD | (stat.S_IEXEC if os.path.isdir(p) else 0))
+    except OSError:
+        pass
+
+
+def _retry_readonly(fn, path, *args):
+    try:
+        return fn(path, *args)
+    except PermissionError:
+        _clear_readonly(path)
+        return fn(path, *args)
+
+
+def _same_drive(src: Path, dst: Path) -> bool:
+    a = dst
+    while not a.exists() and a.parent != a:
+        a = a.parent
+    try:
+        return os.stat(src).st_dev == os.stat(a).st_dev
+    except OSError:
+        return os.path.splitdrive(str(src))[0].lower() == os.path.splitdrive(str(dst))[0].lower()
+
+
+def _move_tree_file_by_file(src: Path, dst: Path, job, rec=None):
+    """Move a folder to another drive one file at a time, logging every file so undo works,
+    and remove the emptied source folders. Returns (files_moved, left_behind)."""
+    moved, left = 0, []
+    for root, dirs, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        target = dst if rel == "." else dst / rel
+        _mkdirs(target, job)
+        for f in files:
+            s_, d_ = Path(root) / f, target / f
+            final = _unique(d_) if os.path.lexists(d_) else d_
+            try:
+                try:
+                    shutil.move(str(s_), str(final))
+                except PermissionError:
+                    _clear_readonly(s_)
+                    if final.exists():      # copied but the original couldn't be removed
+                        _retry_readonly(os.remove, s_)
+                    else:
+                        shutil.move(str(s_), str(final))
+                job.add({"op": "move", "from": str(s_), "to": str(final)})
+                moved += 1
+                if rec is not None:
+                    rec["progress"] = f"{moved} files moved"
+            except Exception as e:  # noqa
+                left.append(f"{s_}: {e}")
+    for root, dirs, files in os.walk(src, topdown=False):
+        try:
+            _retry_readonly(os.rmdir, root)
+            job.add({"op": "rmdir", "path": root})
+        except OSError:
+            if os.path.isdir(root) and not os.listdir(root):
+                left.append(f"{root}: empty folder Windows wouldn't remove")
+    return moved, left
+
+
 def _mkdirs(path: Path, job: _Job):
     missing = []
     p = path
@@ -281,8 +344,22 @@ def _do_moves(rec, items, job_name):
                 tmp = src.with_name(src.name + ".tidytmp")
                 os.rename(src, tmp)
                 os.rename(tmp, dst)
+            elif os.path.isdir(src) and not os.path.islink(src) and not _same_drive(src, final):
+                # another drive: file by file, so a blocked file or folder can't leave a half-done,
+                # unlogged copy (before 1.4.2 the copy finished but nothing was logged for undo)
+                n, left = _move_tree_file_by_file(src, final, job, rec)
+                r = {"from": str(src), "to": str(final), "status": "moved" if not left else "partly moved",
+                     "files": n}
+                if left:
+                    r["left_behind"] = left[:50]
+                results.append(r)
+                continue
             else:
-                shutil.move(str(src), str(final))
+                try:
+                    shutil.move(str(src), str(final))
+                except PermissionError:
+                    _clear_readonly(src)
+                    shutil.move(str(src), str(final))
             job.add({"op": "move", "from": str(src), "to": str(final)})
             r = {"from": str(src), "to": str(final), "status": "moved"}
             if final != dst:
