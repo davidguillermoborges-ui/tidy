@@ -1,5 +1,9 @@
 # Tidy changes
 
+## 1.4.2 (2026-11-14)
+- Fix: moving a folder to another drive (C: to D:) when Windows blocks part of it, for example a read-only or synced (Google Drive) folder. Before, the copy finished, then removing the original failed halfway, and nothing was logged, so undo couldn't help. Now Tidy moves such folders one file at a time, clears the read-only flag when Windows blocks a file or folder, logs every file (undo puts each one back, folders included) and lists anything it really couldn't move.
+- Single files blocked by a read-only flag are moved too, after clearing the flag.
+
 ## 1.4.1 (2026-11-13)
 - Fix: moving folders "into" a folder that doesn't exist yet. Before, the first folder moved became the new folder itself, so its files ended up loose (this happened to Captioner when tidying Downloads). Now Tidy creates the target folder first and puts every item inside it with its own name. Undo removes the new folder again.
 
